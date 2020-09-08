@@ -14,11 +14,8 @@ N = 1024
 dtype = "uint32"
 
 
-target = tvm.target.cuda()
-# target = 'llvm -mcpu=core-avx2'
-# target = 'llvm'
-# ctx = tvm.context(target, 0)
-ctx = tvm.gpu()
+target = 'llvm -mcpu=core-avx2'
+ctx = tvm.context(target, 0)
 
 a = tvm.nd.array(np.random.rand(M, K).astype(dtype), ctx)
 b = tvm.nd.array(np.random.rand(K, N).astype(dtype), ctx)
@@ -38,12 +35,27 @@ np_runing_time = timeit.timeit(setup='import numpy\n'
                                number=np_repeat)
 print("Numpy running time: %f" % (np_runing_time / np_repeat))
 
+
 # tvm mixed bitwidth matrix multi
 A = tvm.te.placeholder((M, K), dtype=dtype, name="A")
 B = tvm.te.placeholder((K, N), dtype=dtype, name="B")
-C = topi.nn.bitserial_dense(A, B, 2, 2, unipolar=False)
+C = topi.nn.bitserial_dense(A, B, 2, 2)
 
+bn = 32 
 s = te.create_schedule(C.op)
+
+# Blocking by loop tiling
+xo, yo, xi, yi = s[C].tile(C.op.axis[0], C.op.axis[1], bn, bn)
+k, _, _ = s[C].op.reduce_axis
+ko, ki = s[C].split(k, factor=4)
+s[C].reorder(xo, yo, ko, ki, xi, yi)
+# s[C].reorder(xo, yo, ko, xi, ki, yi)
+
+
+# vectorization
+s[C].vectorize(yi)
+
+
 func = tvm.build(s, [A, B, C], target=target, name='mmult')
 assert func
 
